@@ -1,0 +1,7 @@
+-R ./src SPAM
+src/Arithmetic.v
+src/SeparationLogic/Syntax.v
+src/SeparationLogic/Semantics.v
+src/SeparationLogic/Program.v
+src/SeparationLogicWithMutability/Syntax.v
+src/SeparationLogicWithMutability/Semantics.v
