@@ -24,6 +24,8 @@ Module LogicalMap := FMapWeakList.Make DecidableLvar.
 Definition logicalEnv : Type := LogicalMap.t concrete.
 
 Module ProgramMap := FMapWeakList.Make DecidablePvar.
+Module ProgramMapF := WFacts ProgramMap.
+Module ProgramMapP := WProperties ProgramMap.
 
 Definition variableStore : Type := ProgramMap.t concrete.
 
@@ -138,7 +140,7 @@ Proof.
   intros empty_A e s h B sat_B_sand_A.
   simpl.
   exists h.
-  exists(HeapMap.empty concrete).
+  exists (HeapMap.empty concrete).
   split.
   { unfold HeapMapP.Partition.
     split.

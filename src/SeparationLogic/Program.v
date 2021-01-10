@@ -123,7 +123,7 @@ Inductive RunsTo (sv : variableStore) (h : heap) : statement -> variableStore ->
   : length inits = length vals
     -> EvalList sv (combine inits vals)
     -> AllFree c (length inits) h
-    -> <cons v inits, (sv, h)> ~> (sv, addConsecutive c vals h)
+    -> <cons v inits, (sv, h)> ~> (ProgramMap.add v c sv, addConsecutive c vals h)
   | lookupRunsTo (x : pvar) (e : expr) (c c' : concrete)
   : [[ e ]]_{ sv } = c
     -> HeapMap.MapsTo c c' h
@@ -144,6 +144,54 @@ Definition statementModifies (stat : statement) : pvarSet :=
   | mutate _ _ => ProgramSet.empty
   | dispose _ => ProgramSet.empty
   end.
+
+Lemma not_in_statementModifies_implies_unmodified (s s' : variableStore) (stat : statement)
+  : forall (h h' : heap),
+      <stat, (s, h)> ~> (s', h')
+      -> forall (v : pvar) (c : concrete),
+          ~ ProgramSet.In v (statementModifies stat)
+          -> (ProgramMap.MapsTo v c s
+              <-> ProgramMap.MapsTo v c s').
+Proof.
+  intros h h' stat_runs.
+  destruct stat as [ v _inits | x _e | _e _v | _e ]; inversion stat_runs.
+  { intros v1 c1 v1_not_in_v.
+    split.
+    { intro v1_mapsto_c1.
+      apply ProgramMapF.add_neq_mapsto_iff.
+      simpl in v1_not_in_v.
+      contradict v1_not_in_v.
+      now apply ProgramSet.singleton_spec.
+      assumption.
+    }
+    { intros v1_mapsto_c1.
+      apply ProgramMapF.add_neq_mapsto_iff in v1_mapsto_c1.
+      assumption.
+      simpl in v1_not_in_v.
+      contradict v1_not_in_v.
+      now apply ProgramSet.singleton_spec.
+    }
+  }
+  { intros v1 c1 v1_not_in_x.
+    split.
+    { intro v1_mapsto_c1.
+      apply ProgramMapF.add_neq_mapsto_iff.
+      simpl in v1_not_in_x.
+      contradict v1_not_in_x.
+      now apply ProgramSet.singleton_spec.
+      assumption.
+    }
+    { intros v1_mapsto_c1.
+      apply ProgramMapF.add_neq_mapsto_iff in v1_mapsto_c1.
+      assumption.
+      simpl in v1_not_in_x.
+      contradict v1_not_in_x.
+      now apply ProgramSet.singleton_spec.
+    }
+  }
+  { easy. }
+  { easy. }
+  Qed.
 
 Fixpoint modifies (prog : program) : pvarSet :=
   match prog with
@@ -182,27 +230,23 @@ Inductive Triple : sassert -> statement -> sassert -> Prop :=
   | localAllocate (v : pvar) (exprs : list expr)
   : { empty }- cons v exprs -{ multiton (aembed (vpvar v)) (List.map exprToValue exprs) }
   | localLookup (x : pvar) (e : expr) (v : expr)
-  : { exprToValue e |-> exprToValue v }- lookup x e -{ (exprToValue e |-> exprToValue v) s/\ eq_s (exprToValue e) (exprToValue v) }
+  : { exprToValue e |-> exprToValue v }- lookup x e -{ (exprToValue e |-> exprToValue v) s/\ exprToValue e s= exprToValue v }
   | localMutate (e v v' : expr)
   : { exprToValue e |-> exprToValue v' }- mutate e v -{ exprToValue e |-> exprToValue v }
   | localDispose (e v : expr)
   : { exprToValue e |-> exprToValue v }- dispose e -{ empty }
+  (* Consequence and frame are defined for statements because it's easier to
+  * argue that they then allow for all specifications *)
+  | consequence (A A' B B' : sassert) (stat : statement)
+  : _|= A' s-> A
+    -> _|= B s-> B'
+    -> { A }- stat -{ B }
+    -> { A' }- stat -{ B' }
+  | frame (A B C : sassert) (stat : statement)
+  : ProgramSet.Empty (ProgramSet.inter (statementModifies stat) (pvarsOfAssert C))
+    -> { A }- stat -{ B }
+    -> { A s* C }- stat -{ B s* C }
   where "{ A }- s -{ B }" := (Triple A s B).
-
-Theorem triple_sound :
-  forall
-    (pre post : sassert)
-    (stat : statement)
-    (e : logicalEnv)
-    (s s' : variableStore)
-    (h h' : heap),
-    { pre }- stat -{ post }
-    -> (e, s, h) |= pre
-    -> <stat, (s, h)> ~> (s', h')
-    -> (e, s', h') |= post.
-Proof.
-  (* TODO: this proof requires many lemmas *)
-  Admitted.
 
 Reserved Notation "< stat , ( s , h ) > ~>* ( s' , h' )" (at level 90).
 
@@ -216,6 +260,32 @@ Inductive ProgramRunsTo (sv : variableStore) (h : heap) : program -> variableSto
     -> <seq stat prog, (sv, h)> ~>* (sv'', h'')
   where "< stat , ( s , h ) > ~>* ( s' , h' )" := (ProgramRunsTo s h stat s' h').
 
+Corollary not_in_modifies_implies_unmodified (s s' : variableStore) (prog : program)
+  : forall (h h' : heap),
+      <prog, (s, h)> ~>* (s', h')
+      -> forall (v : pvar) (c : concrete),
+          ~ ProgramSet.In v (modifies prog)
+          -> (ProgramMap.MapsTo v c s
+                <-> ProgramMap.MapsTo v c s').
+Proof.
+  intros h h' prog_runs.
+  elim prog_runs.
+  { intros s1 h1 stat s1' h1' stat_runs.
+    now apply not_in_statementModifies_implies_unmodified with (h:=h1) (h':=h1').
+  }
+  { intros s1 h1 stat prog' s1' s1'' h1' h1'' stat_runs prog'_runs IH.
+
+    intros v c v_not_in_modifies.
+    simpl in v_not_in_modifies.
+    rewrite <- IH.
+    apply not_in_statementModifies_implies_unmodified with (h:=h1) (h':=h1') (stat:=stat); try assumption.
+    contradict v_not_in_modifies.
+    apply ProgramSet.union_spec; left; assumption.
+    contradict v_not_in_modifies.
+    now apply ProgramSet.union_spec; right; assumption.
+  }
+  Qed.
+
 Reserved Notation "{ A }* p *{ B }" (at level 99).
 
 Inductive ProgramTriple : sassert -> program -> sassert -> Prop :=
@@ -226,53 +296,282 @@ Inductive ProgramTriple : sassert -> program -> sassert -> Prop :=
   : { A }- stat -{ B }
     -> { B }* prog *{ C }
     -> { A }* seq stat prog *{ C }
-  | consequence (A A' B B' : sassert) (prog : program)
-  : _|= A' s-> A
-    -> _|= B s-> B'
-    -> { A }* prog *{ B }
-    -> { A' }* prog *{ B' }
-  | frame (A B C : sassert) (prog : program)
-  : ProgramSet.Empty (ProgramSet.inter (modifies prog) (pvarsOfAssert C))
-    -> { A }* prog *{ B }
-    -> { A s* C }* prog *{ B s* C }
   where "{ A }* p *{ B }" := (ProgramTriple A p B).
 
-Theorem program_triple_sound :
-  forall
-    (pre post : sassert)
-    (prog : program)
-    (e : logicalEnv)
-    (s s' : variableStore)
-    (h h' : heap),
-    { pre }* prog *{ post }
-    -> (e, s, h) |= pre
-    -> <prog, (s, h)> ~>* (s', h')
-    -> (e, s', h') |= post.
+Lemma relevant_pvars_decide_interps_to (e : logicalEnv) (expr : value_) (c' : concrete)
+  : forall (s s' : variableStore),
+      (forall (v : pvar) (c : concrete),
+        ProgramSet.In v (pvarsOfValue expr)
+        -> (ProgramMap.MapsTo v c s
+            <-> ProgramMap.MapsTo v c s'))
+      -> ([[ expr ]]_{ e, s } = c'
+          <-> [[ expr ]]_{ e, s' } = c').
 Proof.
-  intros pre0 post0 prog0 e s0 s1 h0 h1 triple.
-  generalize s0 h0 s1 h1.
-  eelim triple.
-  { intros pre post stat triple_ s h s' h' pre_sat final_runs.
-    inversion final_runs as [ stat_ s'_ h'_ | ].
-    now apply triple_sound with (pre:=pre) (stat:=stat) (s:=s) (h:=h).
+  intros s s'.
+  generalize c'.
+  elim expr.
+  { intros x c'1 pvars_agree.
+    split.
+    { intro x_interp_to_c'.
+      destruct x; inversion x_interp_to_c'; apply interpEmbed; inversion H0.
+      { apply iConcrete.  }
+      { now apply iLogical. }
+      { apply iProgram.
+        apply pvars_agree; try assumption.
+        now apply ProgramSet.singleton_spec.
+      }
+    }
+    { intro x_interp_to_c'.
+      destruct x; inversion x_interp_to_c'; apply interpEmbed; inversion H0.
+      { apply iConcrete.  }
+      { now apply iLogical. }
+      { apply iProgram.
+        apply pvars_agree; try assumption.
+        now apply ProgramSet.singleton_spec.
+      }
+    }
   }
-  { intros A B C stat prog triple_stat triple_prog IHtriple s h s' h' pre_sat seq_runs.
-    inversion seq_runs as [ | stat_ prog_ s'' s'_ h'' h'_ ].
-    apply IHtriple with (s0:=s'') (h0:=h''); try assumption.
-    now apply triple_sound with (pre:= A) (stat:=stat) (s:=s) (h:=h).
+  { intros a a_pvars_agree b b_pvars_agree c'0 pvars_agree.
+    split.
+    { intro a_plus_b_interp_c'.
+      inversion a_plus_b_interp_c'.
+      apply interpPlus.
+      apply a_pvars_agree; try assumption.
+      intros v c v_in_a.
+      apply pvars_agree.
+      unfold pvarsOfValue.
+      fold pvarsOfValue.
+      apply ProgramSet.union_spec.
+      now left.
+      apply b_pvars_agree; try assumption.
+      intros v c v_in_b.
+      apply pvars_agree.
+      unfold pvarsOfValue.
+      fold pvarsOfValue.
+      apply ProgramSet.union_spec.
+      now right.
+    }
+    { intro a_plus_b_interp_c'.
+      inversion a_plus_b_interp_c'.
+      apply interpPlus.
+      apply a_pvars_agree; try assumption.
+      intros v c v_in_a.
+      apply pvars_agree.
+      unfold pvarsOfValue.
+      fold pvarsOfValue.
+      apply ProgramSet.union_spec.
+      now left.
+      apply b_pvars_agree; try assumption.
+      intros v c v_in_b.
+      apply pvars_agree.
+      unfold pvarsOfValue.
+      fold pvarsOfValue.
+      apply ProgramSet.union_spec.
+      now right.
+    }
   }
-  { intros A A' B B' prog A'_impl_A B_impl_B' triple_ IHtriple s h s' h' A_sat prog_runs.
-    apply B_impl_B'.
-    apply IHtriple with (s0:=s) (h0:=h); try assumption.
-    now apply A'_impl_A.
+  { admit. (* Minus case *) }
+  { admit. (* Times case *) }
+  Admitted.
+
+Lemma relevant_pvars_decide_statement (e : logicalEnv) (h : heap) (A : sassert)
+  : forall (s s' : variableStore),
+      (forall (v : pvar) (c : concrete),
+        ProgramSet.In v (pvarsOfAssert A)
+        -> (ProgramMap.MapsTo v c s
+            <-> ProgramMap.MapsTo v c s'))
+      -> (((e, s, h) |= A)
+          <-> ((e, s', h) |= A)).
+Proof.
+  eelim A.
+  { easy. }
+  { simpl.
+    admit. (* TODO: needs helper lemma for EvalsTo *)
   }
-  { (* TODO: probably the hardest part of this proof
-       - showing that frame is sound! *)
-    (* The basic sketch is:
-        * Anything not in the modifies set is unchanged by execution
-        * A statement which doesn't use the modifies set has the same truth value after execution
-        * So the framed off statement still holds
-    *)
-    admit.
+  { simpl.
+    intros L L_pvars_agree R R_pvars_agree s s' pvars_agree.
+    split.
+    { split.
+      { apply L_pvars_agree with (s:=s).
+        intros v c v_in_L.
+        apply pvars_agree.
+        apply ProgramSet.union_spec.
+        now left.
+        easy.
+      }
+      { apply R_pvars_agree with (s:=s).
+        intros v c v_in_R.
+        apply pvars_agree.
+        apply ProgramSet.union_spec.
+        now right.
+        easy.
+      }
+    }
+    { split.
+      { apply L_pvars_agree with (s:=s').
+        intros v c v_in_L.
+        rewrite pvars_agree.
+        easy.
+        apply ProgramSet.union_spec.
+        now left.
+        easy.
+      }
+      { apply R_pvars_agree with (s:=s').
+        intros v c v_in_R.
+        rewrite pvars_agree.
+        easy.
+        apply ProgramSet.union_spec.
+        now right.
+        easy.
+      }
+    }
+  }
+  { simpl.
+    intros L L_pvars_agree R R_pvars_agree s s' pvars_agree.
+    split.
+    { intros [ L_sat | R_sat ].
+      { left.
+        apply L_pvars_agree with (s:=s).
+        intros v c v_in_L.
+        apply pvars_agree.
+        apply ProgramSet.union_spec.
+        now left.
+        easy.
+      }
+      { right.
+        apply R_pvars_agree with (s:=s).
+        intros v c v_in_R.
+        apply pvars_agree.
+        apply ProgramSet.union_spec.
+        now right.
+        easy.
+      }
+    }
+    { intros [ L_sat | R_sat ].
+      { left.
+        apply L_pvars_agree with (s:=s').
+        intros v c v_in_L.
+        rewrite pvars_agree.
+        easy.
+        apply ProgramSet.union_spec.
+        now left.
+        easy.
+      }
+      { right.
+        apply R_pvars_agree with (s:=s').
+        intros v c v_in_R.
+        rewrite pvars_agree.
+        easy.
+        apply ProgramSet.union_spec.
+        now right.
+        easy.
+      }
+    }
+  }
+  { simpl.
+    intros nA nA_pvars_agree s s' pvars_agree.
+    split.
+    { intros not_A.
+      contradict not_A.
+      rewrite <- nA_pvars_agree with (s:=s'); try assumption.
+      intros v c v_in_nA.
+      now rewrite pvars_agree.
+    }
+    { intros not_A.
+      contradict not_A.
+      rewrite <- nA_pvars_agree with (s:=s); try assumption.
+    }
+  }
+  { intros L L_pvars_agree R R_pvars_agree s s' pvars_agree.
+    split.
+    { intros L_impl_R_sat L_sat.
+      apply R_pvars_agree with (s:=s).
+      intros v c v_in_R.
+      apply pvars_agree.
+      apply ProgramSet.union_spec.
+      now right.
+      apply L_impl_R_sat.
+      fold Satisfies.
+      rewrite L_pvars_agree with (s':=s'); try assumption.
+      intros v c v_in_L.
+      apply pvars_agree.
+      apply ProgramSet.union_spec.
+      now left.
+    }
+    { intros L_impl_R_sat L_sat.
+      apply R_pvars_agree with (s:=s').
+      intros v c v_in_R.
+      rewrite pvars_agree.
+      easy.
+      apply ProgramSet.union_spec.
+      now right.
+      apply L_impl_R_sat.
+      fold Satisfies.
+      rewrite L_pvars_agree with (s':=s); try assumption.
+      intros v c v_in_L.
+      rewrite pvars_agree.
+      easy.
+      apply ProgramSet.union_spec.
+      now left.
+    }
+  }
+  { intros; easy. }
+  { intros x v s s' pvars_agree.
+    split.
+    { unfold Satisfies.
+      intros [ c [ c' [ x_interps_c [ v_interps_c' h_singleton_c_c' ]]]].
+      exists c.
+      exists c'.
+      split.
+      { rewrite relevant_pvars_decide_interps_to with (s':=s).
+        easy.
+        intros v0 c0 v0_in_x.
+        rewrite pvars_agree; try easy.
+        apply ProgramSet.union_spec.
+        now left.
+      }
+      split.
+      { rewrite relevant_pvars_decide_interps_to with (s':=s).
+        easy.
+        intros v0 c0 v0_in_x.
+        rewrite pvars_agree; try easy.
+        apply ProgramSet.union_spec.
+        now right.
+      }
+      { easy.
+      }
+    }
+    { unfold Satisfies.
+      intros [ c [ c' [ x_interps_c [ v_interps_c' h_singleton_c_c' ]]]].
+      exists c.
+      exists c'.
+      split.
+      { rewrite relevant_pvars_decide_interps_to with (s':=s').
+        easy.
+        intros v0 c0 v0_in_x.
+        rewrite pvars_agree; try easy.
+        apply ProgramSet.union_spec.
+        now left.
+      }
+      split.
+      { rewrite relevant_pvars_decide_interps_to with (s':=s').
+        easy.
+        intros v0 c0 v0_in_x.
+        rewrite pvars_agree; try easy.
+        apply ProgramSet.union_spec.
+        now right.
+      }
+      { easy.
+      }
+    }
+  }
+  { admit. (* Separating conjunction *)
+  }
+  { admit. (* Separating implication *)
+  }
+  { admit. (* Forall *)
+  }
+  { admit. (* Exists *)
   }
   Admitted.
+
