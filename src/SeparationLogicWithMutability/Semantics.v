@@ -43,16 +43,38 @@ Proof.
   split.
   { apply HeapMapP.partition_Partition in e as partition.
     assumption.
-    admit. (* partition respects eq *)
+    intros _ _ _ [ x x_mut ] [ y y_mut ] x_eq_y.
+    inversion x_eq_y.
+    trivial.
   }
   split.
   { unfold Mutable.
-    admit. (* All keys in the mutable filter are mutable *)
+    unfold HeapMapP.partition in e.
+    inversion e.
+    intros iota v m iota_mapsto_v_m.
+    apply HeapMapP.filter_iff in iota_mapsto_v_m.
+    destruct iota_mapsto_v_m as [ _ m_match_mutable ].
+    destruct m.
+    { trivial. }
+    { discriminate. }
+    intros _ _ _ [ x x_mut ] [ y y_mut ] x_eq_y.
+    inversion x_eq_y.
+    trivial.
   }
   { unfold Immutable.
-    admit. (* And the same for the immutable filter *)
+    unfold HeapMapP.partition in e.
+    inversion e.
+    intros iota v m iota_mapsto_v_m.
+    apply HeapMapP.filter_iff in iota_mapsto_v_m.
+    destruct iota_mapsto_v_m as [ _ m_match_mutable ].
+    destruct m.
+    { discriminate. }
+    { trivial. }
+    intros _ _ _ [ x x_mut ] [ y y_mut ] x_eq_y.
+    inversion x_eq_y.
+    trivial.
   }
-  Admitted.
+  Qed.
 
 Fixpoint MSatisfies (e : logicalEnv) (s : variableStore) (h : mutheap) (A : massert) : Prop :=
   match A with
@@ -90,16 +112,20 @@ Proof.
   { split.
     { easy.  }
     { unfold Mutable.
-      admit. (* Trivial key property over the empty heap *)
+      intros iota v m mapsto_empty.
+      contradict mapsto_empty.
+      now rewrite HeapMapF.empty_mapsto_iff.
     }
   }
   { split.
     { easy.  }
-    { unfold Mutable.
-      admit. (* Trivial key property over the empty heap *)
+    { unfold Immutable.
+      intros iota v m mapsto_empty.
+      contradict mapsto_empty.
+      now rewrite HeapMapF.empty_mapsto_iff.
     }
   }
-  Admitted.
+  Qed.
 
 Definition MTautology (A : massert) : Prop
   := forall e s h, (e, s, h) m|= A.
